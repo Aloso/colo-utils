@@ -107,8 +107,13 @@ pub fn ansi_to_html(
     input: &str,
     four_bit_var_prefix: Option<String>,
     theme: Theme,
+    skip_optimize: bool,
 ) -> Result<String, Error> {
-    let mut minifier = minifier::Minifier::new(four_bit_var_prefix, theme);
+    let mut ansi_sink: Box<dyn AnsiSink> = if skip_optimize {
+        Box::new(AnsiConverter::new(four_bit_var_prefix, theme))
+    } else {
+        Box::new(minifier::Minifier::new(four_bit_var_prefix, theme))
+    };
 
     for fragment in AnsiParser::new(input) {
         match fragment {
@@ -119,7 +124,7 @@ pub fn ansi_to_html(
 
                 let len = ansi_codes.len();
                 if len == 3 {
-                    minifier.clear_styles();
+                    ansi_sink.clear_styles();
                     continue;
                 }
 
@@ -128,16 +133,23 @@ pub fn ansi_to_html(
                 let norm_nums = norm_nums.split(';').map(|n| n.parse::<u8>());
 
                 for ansi in AnsiIter::new(norm_nums) {
-                    minifier.push_ansi_code(ansi?);
+                    ansi_sink.push_ansi_code(ansi?);
                 }
             }
-            AnsiFragment::Text(text) => minifier.push_str(text),
+            AnsiFragment::Text(text) => ansi_sink.push_str(text),
         }
     }
 
-    minifier.push_ansi_code(Ansi::Reset); // make sure all tags are closed
+    ansi_sink.push_ansi_code(Ansi::Reset); // make sure all tags are closed
 
-    Ok(minifier.into_html())
+    Ok(ansi_sink.to_html())
+}
+
+trait AnsiSink {
+    fn clear_styles(&mut self);
+    fn push_ansi_code(&mut self, ansi: Ansi);
+    fn push_str(&mut self, text: &str);
+    fn to_html(&mut self) -> String;
 }
 
 #[derive(Debug, Default)]
@@ -155,33 +167,6 @@ impl AnsiConverter {
             four_bit_var_prefix,
             theme,
             ..Self::default()
-        }
-    }
-
-    fn consume_ansi_code(&mut self, ansi: Ansi) {
-        match ansi {
-            Ansi::Noop => {}
-            Ansi::Reset => self.clear_style(|_| true),
-            Ansi::Bold => self.set_style(Style::Bold),
-            Ansi::Faint => self.set_style(Style::Faint),
-            Ansi::Italic => self.set_style(Style::Italic),
-            Ansi::Underline => self.set_style(Style::Underline(UnderlineStyle::Default)),
-            Ansi::Invert => self.set_style(Style::Inverted),
-            Ansi::DoubleUnderline => self.set_style(Style::Underline(UnderlineStyle::Double)),
-            Ansi::CrossedOut => self.set_style(Style::CrossedOut),
-            Ansi::BoldAndFaintOff => self.clear_style(|&s| s == Style::Bold || s == Style::Faint),
-            Ansi::ItalicOff => self.clear_style(|&s| s == Style::Italic),
-            Ansi::UnderlineOff => self.clear_style(|&s| matches!(s, Style::Underline(_))),
-            Ansi::InvertOff => self.clear_style(|&s| s == Style::Inverted),
-            Ansi::CrossedOutOff => self.clear_style(|&s| s == Style::CrossedOut),
-            Ansi::ForgroundColor(c) => self.set_style(Style::ForegroundColor(c)),
-            Ansi::DefaultForegroundColor => {
-                self.clear_style(|&s| matches!(s, Style::ForegroundColor(_)))
-            }
-            Ansi::BackgroundColor(c) => self.set_style(Style::BackgroundColor(c)),
-            Ansi::DefaultBackgroundColor => {
-                self.clear_style(|&s| matches!(s, Style::BackgroundColor(_)))
-            }
         }
     }
 
@@ -209,12 +194,45 @@ impl AnsiConverter {
             self.styles.push(style);
         }
     }
+}
 
-    fn push_str(&mut self, s: &str) {
-        self.result.push_str(s);
+impl AnsiSink for AnsiConverter {
+    fn clear_styles(&mut self) {
+        self.clear_style(|_| true);
     }
 
-    fn result(self) -> String {
-        self.result
+    fn push_ansi_code(&mut self, ansi: Ansi) {
+        match ansi {
+            Ansi::Noop => {}
+            Ansi::Reset => self.clear_style(|_| true),
+            Ansi::Bold => self.set_style(Style::Bold),
+            Ansi::Faint => self.set_style(Style::Faint),
+            Ansi::Italic => self.set_style(Style::Italic),
+            Ansi::Underline => self.set_style(Style::Underline(UnderlineStyle::Default)),
+            Ansi::Invert => self.set_style(Style::Inverted),
+            Ansi::DoubleUnderline => self.set_style(Style::Underline(UnderlineStyle::Double)),
+            Ansi::CrossedOut => self.set_style(Style::CrossedOut),
+            Ansi::BoldAndFaintOff => self.clear_style(|&s| s == Style::Bold || s == Style::Faint),
+            Ansi::ItalicOff => self.clear_style(|&s| s == Style::Italic),
+            Ansi::UnderlineOff => self.clear_style(|&s| matches!(s, Style::Underline(_))),
+            Ansi::InvertOff => self.clear_style(|&s| s == Style::Inverted),
+            Ansi::CrossedOutOff => self.clear_style(|&s| s == Style::CrossedOut),
+            Ansi::ForgroundColor(c) => self.set_style(Style::ForegroundColor(c)),
+            Ansi::DefaultForegroundColor => {
+                self.clear_style(|&s| matches!(s, Style::ForegroundColor(_)))
+            }
+            Ansi::BackgroundColor(c) => self.set_style(Style::BackgroundColor(c)),
+            Ansi::DefaultBackgroundColor => {
+                self.clear_style(|&s| matches!(s, Style::BackgroundColor(_)))
+            }
+        }
+    }
+
+    fn push_str(&mut self, text: &str) {
+        self.result.push_str(text);
+    }
+
+    fn to_html(&mut self) -> String {
+        self.result.clone()
     }
 }
