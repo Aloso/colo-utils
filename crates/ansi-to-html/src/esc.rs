@@ -32,16 +32,29 @@ pub struct Esc<T: AsRef<str>>(pub T);
 
 impl<T: AsRef<str>> fmt::Display for Esc<T> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        for c in self.0.as_ref().chars() {
-            match c {
-                '&' => fmt::Display::fmt("&amp;", f)?,
-                '<' => fmt::Display::fmt("&lt;", f)?,
-                '>' => fmt::Display::fmt("&gt;", f)?,
-                '"' => fmt::Display::fmt("&quot;", f)?,
-                '\'' => fmt::Display::fmt("&#39;", f)?,
-                c => fmt::Display::fmt(&c, f)?,
+        const SPECIAL_CHARS: [char; 5] = ['&', '<', '>', '"', '\''];
+
+        for chunk in self.0.as_ref().split_inclusive(SPECIAL_CHARS) {
+            if chunk.ends_with(SPECIAL_CHARS) {
+                let special = chunk
+                    .chars()
+                    .last()
+                    .expect("We know we end with a special char");
+                f.write_str(&chunk[..chunk.len() - special.len_utf8()])?;
+                let escaped = match special {
+                    '&' => "&amp;",
+                    '<' => "&lt;",
+                    '>' => "&gt;",
+                    '"' => "&quot;",
+                    '\'' => "&#39;",
+                    _ => unreachable!("We covered all patterns from `.ends_with(SPECIAL_CHARS)`"),
+                };
+                f.write_str(escaped)?;
+            } else {
+                f.write_str(chunk)?;
             }
         }
+
         Ok(())
     }
 }
